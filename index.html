@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PMAS — Clinical Planning System</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='28' font-size='28'>🏥</text></svg>">
+
+<!-- Export helpers -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://unpkg.com/docx@8.5.0/build/index.umd.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+<!-- DICOM -->
+<script src="https://unpkg.com/dicom-parser/dist/dicomParser.min.js"></script>
+
+<!-- AI: TensorFlow + FaceMesh -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.16.0/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl@4.16.0/dist/tf-backend-webgl.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh@0.4/face_mesh.js"></script>
+<script src="https://unpkg.com/@tensorflow-models/face-landmarks-detection/dist/face-landmarks-detection.min.js"></script>
+
+<!-- Three.js -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<link rel="stylesheet" href="./assets/css/style.css" />
+</head>
+<body>
+
+<!-- ========== HEADER ========== -->
+<header class="app-header">
+  <div class="header-left">
+    <div class="logo">
+      <span class="logo-icon">⬡</span>
+      <span class="logo-text">PMAS</span>
+    </div>
+    <span class="header-subtitle">Clinical Planning System</span>
+  </div>
+
+  <nav class="tab-nav" id="tabNav">
+    <button class="tab-btn active" data-tab="tab2d">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+      <span>2D Анализ</span>
+    </button>
+    <button class="tab-btn" data-tab="tab3d">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+      <span>3D Модель</span>
+    </button>
+    <button class="tab-btn" data-tab="tabAbout">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <span>О проекте</span>
+    </button>
+  </nav>
+
+  <button class="hamburger" id="hamburgerBtn" aria-label="Меню">
+    <span></span><span></span><span></span>
+  </button>
+</header>
+
+<!-- ========== TAB: 2D ANALYSIS ========== -->
+<div class="tab-content active" id="tab2d">
+  <div class="layout">
+    <!-- SIDEBAR -->
+    <aside class="sidebar" id="sidebar2d">
+
+      <!-- Patient Info -->
+      <div class="card">
+        <div class="card-title">👤 Пациент</div>
+        <div class="form-row">
+          <div class="form-group flex-grow">
+            <label>ФИО</label>
+            <input type="text" id="patientName" placeholder="ФИО пациента" />
+          </div>
+          <div class="form-group">
+            <label>Дата</label>
+            <input type="date" id="examDate" />
+          </div>
+        </div>
+        <div class="file-upload" style="margin-top:10px">
+          <input type="file" id="imageLoader" accept="image/*,.dcm" />
+          <div class="file-upload-label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Загрузить фото / DICOM
+          </div>
+        </div>
+      </div>
+
+      <!-- Measurements & Zoom -->
+      <div class="card">
+        <div class="card-title">📐 Измерения</div>
+        <div class="btn-grid">
+          <button class="btn btn-primary" id="btnCal">📏 Калибровка</button>
+          <button class="btn btn-primary" id="btnH">↕ Измерить H</button>
+          <button class="btn btn-primary" id="btnL">↔ Измерить L</button>
+          <button class="btn btn-accent" id="btnAI">🤖 AI ориентиры</button>
+          <button class="btn" id="btnTrichion">📍 Trichion</button>
+        </div>
+        <div class="form-row" style="margin-top:10px;align-items:center">
+          <span class="label-sm">Масштаб</span>
+          <button class="btn btn-sm" id="btnZoomOut">−</button>
+          <span class="badge" id="zoomBadge">100%</span>
+          <button class="btn btn-sm" id="btnZoomIn">+</button>
+          <button class="btn btn-sm" id="btnZoomReset">↺ Сброс</button>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+          <button class="btn btn-sm" id="btnSnapshotBeforeTop">💾 До</button>
+          <button class="btn btn-sm" id="btnToggleBeforeTop">👁 Показать До</button>
+          <button class="btn btn-danger btn-sm" id="btnResetToBeforeTop">↩ Откатить</button>
+        </div>
+      </div>
+
+      <!-- Plan Instruments -->
+      <div class="card">
+        <div class="card-title">🛠 Инструменты плана</div>
+        <div class="btn-grid">
+          <button class="btn btn-accent" id="btnPlanVector">➡️ Вектор</button>
+          <button class="btn btn-accent" id="btnPlanTilt">📊 Наклон</button>
+          <button class="btn btn-accent" id="btnPlanAngle3">📐 Угол (3 точки)</button>
+          <button class="btn btn-accent" id="btnPlanMeasure">📏 Измерение</button>
+        </div>
+      </div>
+
+      <!-- Plan Details -->
+      <div class="card">
+        <div class="card-title">📋 План операции</div>
+        <div class="form-row">
+          <div class="form-group flex-grow">
+            <label>Процедура</label>
+            <select id="procedure">
+              <option value="">Процедура...</option>
+              <option>Ринопластика</option>
+              <option>Блефаропластика</option>
+              <option>Фейслифтинг</option>
+              <option>Гениопластика</option>
+              <option>Контурная пластика</option>
+              <option>Другое</option>
+            </select>
+          </div>
+          <div class="form-group flex-grow">
+            <label>Цель</label>
+            <input type="text" id="goal" placeholder="Цель..." />
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+          <label>Пресеты</label>
+        </div>
+        <div class="form-row" style="margin-top:4px">
+          <select id="presetSelect" class="flex-grow">
+            <option value="">Пресет...</option>
+            <option value="eye_cant">Кантинг глаз</option>
+            <option value="nose_axis">Ось носа</option>
+            <option value="nasolabial">Носогубный угол</option>
+            <option value="chin_tilt">Линия подбородка</option>
+            <option value="facelift_lines">Фейслифтинг</option>
+            <option value="facelift_smas">SMAS</option>
+            <option value="facelift_deepplane">Deep-plane</option>
+            <option value="facelift_macs">MACS</option>
+          </select>
+          <button class="btn btn-primary btn-sm" id="btnAddPreset">+ Добавить</button>
+        </div>
+        <div class="hint" id="presetHint"></div>
+        <div class="form-row" style="margin-top:8px;gap:4px">
+          <input type="text" id="planLabel" placeholder="Имя элемента..." class="flex-grow" />
+          <button class="btn btn-sm" id="btnUseAIasPoints" title="Точки из AI">🤖</button>
+          <button class="btn btn-danger btn-sm" id="btnClearPlan" title="Очистить">🗑</button>
+        </div>
+        <span class="badge badge-info" id="aiPickBadge" style="display:none">Выбор AI-точек</span>
+      </div>
+
+      <!-- Plan Items -->
+      <div class="card">
+        <div class="card-title">📑 Элементы плана <span class="badge" id="planCountBadge">0</span></div>
+        <div id="planList" class="plan-list"></div>
+        <textarea id="notes" rows="2" placeholder="Заметки..." style="margin-top:8px"></textarea>
+      </div>
+
+      <!-- Shift Planning -->
+      <div class="card">
+        <div class="card-title">↔ Смещение и асимметрия</div>
+        <div class="form-row align-end">
+          <div class="form-group flex-grow">
+            <label>Элемент</label>
+            <div id="selectedItemInfo" class="hint">—</div>
+          </div>
+          <div class="form-group">
+            <label>мм</label>
+            <input type="number" id="plannedShiftMM" step="0.1" placeholder="6.0" style="width:70px" />
+          </div>
+          <button class="btn btn-primary btn-sm" id="btnApplyShift">OK</button>
+        </div>
+        <div class="form-row" style="margin-top:6px">
+          <button class="btn btn-sm" id="btnSnapshotBefore">💾 До</button>
+          <button class="btn btn-sm" id="btnToggleBefore">👁 Показать</button>
+          <button class="btn btn-danger btn-sm" id="btnResetToBefore">↩ Откатить</button>
+        </div>
+        <span class="badge badge-info" id="beforeBadge" style="display:none">Показ «До»</span>
+        <div style="margin-top:8px">
+          <span class="label-sm">Асимметрия</span>
+          <div id="asymmetryBox" class="hint">—</div>
+        </div>
+      </div>
+
+      <!-- Metrics -->
+      <div class="card">
+        <div class="card-title">📊 Метрики</div>
+        <div class="metrics-row">
+          <div class="metric-item">
+            <span class="label-sm">Масштаб</span>
+            <span class="badge" id="scaleBadge">—</span>
+          </div>
+        </div>
+        <div style="margin-top:8px">
+          <div id="results"></div>
+        </div>
+        <div class="ab-result">
+          <span class="label-sm">AB = √(H² + L²)</span>
+          <div id="abResult" class="ab-value">—</div>
+        </div>
+        <div style="margin-top:8px">
+          <span class="label-sm">AI анализ</span>
+          <div id="aiSummary" class="hint">—</div>
+          <div id="aiDetails" class="ai-details"></div>
+        </div>
+      </div>
+
+      <!-- Status + Export -->
+      <div id="status" class="status-bar">Загрузите фото для начала работы</div>
+      <div class="export-bar">
+        <button class="btn btn-primary" id="btnPDF">📄 PDF</button>
+        <button class="btn btn-primary" id="btnDOCX">📝 DOCX</button>
+        <button class="btn btn-danger" id="btnClear">🗑 Очистить</button>
+      </div>
+    </aside>
+
+    <!-- VIEWPORT 2D -->
+    <main class="viewport-wrap">
+      <div id="viewport">
+        <img id="photo" alt="patient photo" />
+        <canvas id="overlay"></canvas>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ========== TAB: 3D MODEL ========== -->
+<div class="tab-content" id="tab3d">
+  <div class="layout">
+    <!-- SIDEBAR 3D -->
+    <aside class="sidebar" id="sidebar3d">
+
+      <!-- Patient Info -->
+      <div class="card">
+        <div class="card-title">👤 Пациент</div>
+        <div class="form-row">
+          <div class="form-group flex-grow">
+            <label>ФИО</label>
+            <input type="text" id="patientName3d" placeholder="ФИО пациента" />
+          </div>
+          <div class="form-group">
+            <label>Дата</label>
+            <input type="date" id="examDate3d" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Model Selection -->
+      <div class="card">
+        <div class="card-title">🧊 Модель</div>
+        <div class="form-row" style="gap:4px">
+          <select id="modelSelect" class="flex-grow">
+            <option value="models/LeePerrySmith.glb">Lee Perry-Smith</option>
+            <option value="models/facecap.glb">Face Cap</option>
+          </select>
+          <button class="btn btn-danger btn-sm" id="btnDeleteModel" title="Удалить модель">✕</button>
+        </div>
+        <div class="file-upload" style="margin-top:8px">
+          <input type="file" id="fileInput3d" accept=".glb,.gltf" />
+          <div class="file-upload-label">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Загрузить .glb / .gltf
+          </div>
+        </div>
+      </div>
+
+      <!-- Display & Lighting -->
+      <div class="card">
+        <div class="card-title">🎨 Отображение</div>
+        <div class="btn-grid">
+          <button class="btn" id="btnWireframe">🔲 Wireframe</button>
+          <button class="btn" id="btnNormals">🟣 Нормали</button>
+          <button class="btn" id="btnResetView">↺ Сброс вида</button>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+          <span class="label-sm">Свет</span>
+          <button class="btn btn-sm" id="btnLight1">☀️ Дневной</button>
+          <button class="btn btn-sm" id="btnLight2">🌤 Мягкий</button>
+          <button class="btn btn-sm" id="btnLight3">💡 Студия</button>
+        </div>
+        <div class="form-row" style="margin-top:8px;align-items:center">
+          <button class="btn btn-sm" id="btn3dCalibrate">📏 Калибровка</button>
+          <span class="badge" id="scale3dBadge">авто</span>
+        </div>
+      </div>
+
+      <!-- 3D Instruments -->
+      <div class="card">
+        <div class="card-title">🛠 Инструменты</div>
+        <div class="btn-grid">
+          <button class="btn btn-accent" id="btn3dPoint">📍 Точка</button>
+          <button class="btn btn-accent" id="btn3dDistance">📏 Расстояние</button>
+          <button class="btn btn-accent" id="btn3dAngle">📐 Угол</button>
+          <button class="btn btn-accent" id="btn3dVector">➡️ Вектор</button>
+          <button class="btn btn-accent" id="btn3dTilt">📊 Наклон</button>
+          <button class="btn btn-accent" id="btn3dMeasure">✏️ Измерение</button>
+        </div>
+      </div>
+
+      <!-- Plan -->
+      <div class="card">
+        <div class="card-title">📋 План операции</div>
+        <div class="form-row">
+          <div class="form-group flex-grow">
+            <label>Процедура</label>
+            <select id="procedure3d">
+              <option value="">Процедура...</option>
+              <option>Ринопластика</option>
+              <option>Блефаропластика</option>
+              <option>Фейслифтинг</option>
+              <option>Гениопластика</option>
+              <option>Контурная пластика</option>
+              <option>Другое</option>
+            </select>
+          </div>
+          <div class="form-group flex-grow">
+            <label>Цель</label>
+            <input type="text" id="goal3d" placeholder="Цель..." />
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:8px;gap:4px">
+          <input type="text" id="planLabel3d" placeholder="Имя элемента..." class="flex-grow" />
+          <button class="btn btn-danger btn-sm" id="btn3dClearAll" title="Очистить">🗑</button>
+          <button class="btn btn-sm" id="btn3dUndo" title="Отменить">↩</button>
+        </div>
+      </div>
+
+      <!-- Plan Items 3D -->
+      <div class="card">
+        <div class="card-title">📑 Элементы плана <span class="badge" id="plan3dCountBadge">0</span></div>
+        <div id="measurements3d" class="plan-list"></div>
+        <textarea id="notes3d" rows="2" placeholder="Заметки..." style="margin-top:8px"></textarea>
+      </div>
+
+      <!-- Shift 3D -->
+      <div class="card">
+        <div class="card-title">↔ Смещение и асимметрия</div>
+        <div class="form-row align-end">
+          <div class="form-group flex-grow">
+            <label>Элемент</label>
+            <div id="selectedItem3dInfo" class="hint">—</div>
+          </div>
+          <div class="form-group">
+            <label>мм</label>
+            <input type="number" id="plannedShift3dMM" step="0.1" placeholder="6.0" style="width:70px" />
+          </div>
+          <button class="btn btn-primary btn-sm" id="btn3dApplyShift">OK</button>
+        </div>
+        <div class="form-row" style="margin-top:6px">
+          <button class="btn btn-sm" id="btn3dSnapshotBefore">💾 До</button>
+          <button class="btn btn-sm" id="btn3dToggleBefore">👁 Показать</button>
+          <button class="btn btn-danger btn-sm" id="btn3dResetToBefore">↩ Откатить</button>
+        </div>
+        <span class="badge badge-info" id="before3dBadge" style="display:none">Показ «До»</span>
+        <div style="margin-top:8px">
+          <span class="label-sm">Асимметрия</span>
+          <div id="asymmetry3dBox" class="hint">—</div>
+        </div>
+      </div>
+
+      <!-- Status + Export -->
+      <div id="status3d" class="status-bar">Выберите инструмент → кликните на модель.</div>
+      <div class="export-bar">
+        <button class="btn btn-primary" id="btn3dPDF">📄 PDF</button>
+        <button class="btn btn-primary" id="btn3dDOCX">📝 DOCX</button>
+      </div>
+      <div class="help-strip">
+        <kbd>ЛКМ</kbd> вращение <kbd>ПКМ</kbd> перемещение <kbd>Колесо</kbd> масштаб <kbd>2×</kbd> центр
+      </div>
+    </aside>
+
+    <!-- VIEWPORT 3D -->
+    <main class="viewport-wrap viewport-3d">
+      <div id="canvas3d-container"></div>
+      <div id="loading3d" class="loading-overlay">
+        <div class="spinner"></div>
+        <span>Загрузка модели...</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<!-- ========== TAB: ABOUT ========== -->
+<div class="tab-content" id="tabAbout">
+  <div class="about-page">
+
+    <!-- Hero -->
+    <section class="about-hero">
+      <div class="hero-badge">Clinical Planning System</div>
+      <h1 class="hero-title">PMAS</h1>
+      <p class="hero-desc">Plastic &amp; Maxillofacial Analysis System</p>
+      <p class="hero-sub">Комплексная система 2D- и 3D-планирования<br>пластических и челюстно-лицевых операций</p>
+    </section>
+
+    <!-- Feature Showcase -->
+    <section class="features-section">
+      <div class="feature-row">
+        <div class="feature-card feature-2d">
+          <div class="feature-num">01</div>
+          <div class="feature-body">
+            <h2>2D Анализ</h2>
+            <p class="feature-desc">Загрузка фото, AI-детекция ориентиров, клинические измерения и планирование операций на 2D-изображениях.</p>
+            <div class="feature-tags">
+              <span class="ftag">AI FaceMesh</span>
+              <span class="ftag">DICOM</span>
+              <span class="ftag">Калибровка</span>
+              <span class="ftag">H / L / AB</span>
+              <span class="ftag">8 пресетов</span>
+              <span class="ftag">До / После</span>
+              <span class="ftag">PDF</span>
+              <span class="ftag">DOCX</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="feature-card feature-3d">
+          <div class="feature-num">02</div>
+          <div class="feature-body">
+            <h2>3D Модель</h2>
+            <p class="feature-desc">Работа с 3D-сканами лица: размещение точек, измерение расстояний и углов, построение векторов прямо на поверхности модели.</p>
+            <div class="feature-tags">
+              <span class="ftag">GLB / GLTF</span>
+              <span class="ftag">Three.js</span>
+              <span class="ftag">6 инструментов</span>
+              <span class="ftag">Raycasting</span>
+              <span class="ftag">Wireframe</span>
+              <span class="ftag">3 режима света</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tech Stack -->
+    <section class="tech-section">
+      <h2 class="section-title">Стек технологий</h2>
+      <div class="tech-grid">
+        <div class="tech-item">
+          <div class="tech-icon">🧊</div>
+          <div class="tech-name">Three.js r170</div>
+          <div class="tech-role">3D рендеринг</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">🤖</div>
+          <div class="tech-name">TensorFlow.js</div>
+          <div class="tech-role">AI детекция</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">🎯</div>
+          <div class="tech-name">MediaPipe</div>
+          <div class="tech-role">FaceMesh 468 точек</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">🖼</div>
+          <div class="tech-name">Canvas 2D</div>
+          <div class="tech-role">Клиническая разметка</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">📄</div>
+          <div class="tech-name">jsPDF</div>
+          <div class="tech-role">Экспорт PDF</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">📝</div>
+          <div class="tech-name">docx.js</div>
+          <div class="tech-role">Экспорт DOCX</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">⚡</div>
+          <div class="tech-name">Vanilla JS</div>
+          <div class="tech-role">ES Modules, без фреймворков</div>
+        </div>
+        <div class="tech-item">
+          <div class="tech-icon">💾</div>
+          <div class="tech-name">localStorage</div>
+          <div class="tech-role">Автосохранение</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Authors -->
+    <section class="authors-section">
+      <div class="authors-card">
+        <div class="authors-badge">Авторы</div>
+        <div class="authors-uni">Национальный исследовательский университет «МЭИ»</div>
+        <div class="authors-group">Группа ИЭ-41-25</div>
+        <div class="authors-divider"></div>
+        <div class="authors-names">
+          <div class="author-chip">
+            <img class="author-avatar" src="assets/img/merkulov.jpg" alt="Меркулов А.А.">
+            <div class="author-info">
+              <div class="author-name">Меркулов А.А.</div>
+            </div>
+          </div>
+          <div class="author-chip">
+            <img class="author-avatar" src="assets/img/lubaev.png" alt="Любаев Д.О.">
+            <div class="author-info">
+              <div class="author-name">Любаев Д.О.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <footer class="about-footer">
+      PMAS v1.0 &middot; 2026
+    </footer>
+
+  </div>
+</div>
+
+<!-- ========== 2D SCRIPTS (existing modules) ========== -->
+<script src="./assets/js/01-state.js"></script>
+<script src="./assets/js/02-geometry.js"></script>
+<script src="./assets/js/03-render.js"></script>
+<script src="./assets/js/04-ui-core.js"></script>
+<script src="./assets/js/05-hit-testing.js"></script>
+<script src="./assets/js/06-file-loader.js"></script>
+<script src="./assets/js/07-interactions.js"></script>
+<script src="./assets/js/08-controls.js"></script>
+<script src="./assets/js/09-export.js"></script>
+<script src="./assets/js/10-ai.js"></script>
+<script src="./assets/js/11-persistence-init.js"></script>
+
+<!-- ========== APP: tabs + 3D ========== -->
+<script type="module" src="./assets/js/app.js"></script>
+
+</body>
+</html>
